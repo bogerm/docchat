@@ -1,0 +1,28 @@
+[project]
+name = "docchat"
+version = "0.1.0"
+description = "Document Chat with RAG and Gradio interface"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "docling>=2.66.0",
+    "gradio>=6.2.0",
+    "ibm-watsonx-ai>=1.4.11",
+    "langchain[retrievers]>=1.2.1",
+    "langchain-community>=0.4.1",
+    "langchain-core>=1.2.6",
+    "langchain-ibm>=1.0.2",
+    "langchain-ollama>=1.0.1",
+    "langchain-openai>=1.1.6",
+    "langgraph>=1.0.5",
+    "loguru>=0.7.3",
+    "pydantic-settings>=2.12.0",
+    "chromadb>=1.4.0",
+    "rank-bm25>=0.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.2",
+]
