@@ -29,13 +29,17 @@ class Settings(BaseSettings):
     IBM_WATSON_PROJECT_ID: str = "skills-network"
     IBM_WATSON_API_KEY: Optional[str] = None
 
+    # OpenRouter settings
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+
     # OpenAI settings
     OPENAI_API_KEY: Optional[str] = None
 
     # Ollama settings
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
-    # Model provider selection (ibm_watson, openai, ollama)
+    # Model provider selection (ibm_watson, openai, ollama, openrouter)
     DEFAULT_MODEL_PROVIDER: str = "ibm_watson"
 
     # Model configurations by role
@@ -52,7 +56,7 @@ class Settings(BaseSettings):
     RELEVANCE_MODEL_PROVIDER: Optional[str] = None
     RELEVANCE_MODEL_ID: str = "ibm/granite-3-3-8b-instruct"
     RELEVANCE_MODEL_TEMPERATURE: float = 0.0
-    RELEVANCE_MODEL_MAX_TOKENS: int = 2000  # Increased for proper classification responses
+    RELEVANCE_MODEL_MAX_TOKENS: int = 16  
 
     # Ollama-specific settings
     OLLAMA_NUM_CTX: int = 32768  # Context window size for large prompts
@@ -68,6 +72,17 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
 
+        
+    def _role_params(self, temperature: float, max_tokens: int, provider: str) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if provider == "ollama":
+            params["num_ctx"] = self.OLLAMA_NUM_CTX
+            params["timeout"] = self.OLLAMA_TIMEOUT
+        return params
+
     def get_model_config(self, role: str) -> Dict[str, Any]:
         """
         Get model configuration for a specific role.
@@ -77,47 +92,43 @@ class Settings(BaseSettings):
             
         Returns:
             Dictionary with provider, model_id, and params
-        """
+        """        
         role = role.lower()
-        
+
         if role == "research":
-            provider = self.RESEARCH_MODEL_PROVIDER or self.DEFAULT_MODEL_PROVIDER
+            provider = (self.RESEARCH_MODEL_PROVIDER or self.DEFAULT_MODEL_PROVIDER).lower()
             return {
                 "provider": provider,
                 "model_id": self.RESEARCH_MODEL_ID,
-                "params": {
-                    "temperature": self.RESEARCH_MODEL_TEMPERATURE,
-                    "max_tokens": self.RESEARCH_MODEL_MAX_TOKENS,
-                    "num_ctx": self.OLLAMA_NUM_CTX,
-                    "timeout": self.OLLAMA_TIMEOUT
-                }
+                "params": self._role_params(self.RESEARCH_MODEL_TEMPERATURE, self.RESEARCH_MODEL_MAX_TOKENS, provider),
             }
-        elif role == "verification":
-            provider = self.VERIFICATION_MODEL_PROVIDER or self.DEFAULT_MODEL_PROVIDER
+
+        if role == "verification":
+            provider = (self.VERIFICATION_MODEL_PROVIDER or self.DEFAULT_MODEL_PROVIDER).lower()
             return {
                 "provider": provider,
                 "model_id": self.VERIFICATION_MODEL_ID,
-                "params": {
-                    "temperature": self.VERIFICATION_MODEL_TEMPERATURE,
-                    "max_tokens": self.VERIFICATION_MODEL_MAX_TOKENS,
-                    "num_ctx": self.OLLAMA_NUM_CTX,
-                    "timeout": self.OLLAMA_TIMEOUT
-                }
+                "params": self._role_params(self.VERIFICATION_MODEL_TEMPERATURE, self.VERIFICATION_MODEL_MAX_TOKENS, provider),
             }
-        elif role == "relevance":
-            provider = self.RELEVANCE_MODEL_PROVIDER or self.DEFAULT_MODEL_PROVIDER
+
+        if role == "relevance":
+            provider = (self.RELEVANCE_MODEL_PROVIDER or self.DEFAULT_MODEL_PROVIDER).lower()
+            max_tokens = self.RELEVANCE_MODEL_MAX_TOKENS
+            if provider == "ollama":
+                # Avoid any “total token budget” interpretation in wrappers.
+                max_tokens = max(max_tokens, 1000)
+
             return {
                 "provider": provider,
                 "model_id": self.RELEVANCE_MODEL_ID,
-                "params": {
-                    "temperature": self.RELEVANCE_MODEL_TEMPERATURE,
-                    "max_tokens": self.RELEVANCE_MODEL_MAX_TOKENS,
-                    "num_ctx": self.OLLAMA_NUM_CTX,
-                    "timeout": self.OLLAMA_TIMEOUT
-                }
+                "params": self._role_params(
+                    self.RELEVANCE_MODEL_TEMPERATURE, 
+                    max_tokens, 
+                    provider),
             }
-        else:
-            raise ValueError(f"Unknown model role: {role}")
+
+        raise ValueError(f"Unknown model role: {role}")
+
 
     def get_embedding_config(self) -> Dict[str, Any]:
         """
@@ -126,7 +137,7 @@ class Settings(BaseSettings):
         Returns:
             Dictionary with provider, model_id, and params
         """
-        provider = self.EMBEDDING_MODEL_PROVIDER or self.DEFAULT_MODEL_PROVIDER
+        provider = (self.EMBEDDING_MODEL_PROVIDER or self.DEFAULT_MODEL_PROVIDER).lower()
         
         return {
             "provider": provider,

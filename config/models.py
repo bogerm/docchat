@@ -6,7 +6,7 @@ for creating and managing different LLM models and embeddings across providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, Callable
 from enum import Enum
 
 from ibm_watsonx_ai.foundation_models import ModelInference
@@ -15,6 +15,7 @@ from ibm_watsonx_ai.metanames import EmbedTextParamsMetaNames
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_ibm import WatsonxEmbeddings
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from config.settings import settings
 from loguru import logger
@@ -25,6 +26,7 @@ class ModelProvider(str, Enum):
     IBM_WATSON = "ibm_watson"
     OPENAI = "openai"
     OLLAMA = "ollama"
+    OPENROUTER = "openrouter"
 
 
 class ModelRole(str, Enum):
@@ -41,7 +43,11 @@ class BaseLLMWrapper(ABC):
     def generate(self, prompt: str) -> str:
         """Generate a response from the model given a prompt."""
         pass
-    
+
+    def generate_messages(self, system: str, user: str) -> str:
+        # default fallback keeps compatibility
+        return self.generate(f"{system}\n\n{user}")
+        
     @abstractmethod
     def get_model_name(self) -> str:
         """Return the model name/identifier."""
@@ -114,6 +120,8 @@ class OpenAIWrapper(BaseLLMWrapper):
 
     def initialize_model(self):    
         # Initialize the ChatOpenAI model
+        if not settings.OPENAI_API_KEY:
+            raise EnvironmentError("OPENAI_API_KEY is not set")
 
         logger.debug(f"Initializing OpenAI model: {self.model_id} with params: {self.params}")
         self.model = ChatOpenAI(
@@ -129,15 +137,75 @@ class OpenAIWrapper(BaseLLMWrapper):
 
         if not self.model_initialized:
             self.initialize_model()
-            self.initialized = True
+            self.model_initialized = True
             
         response = self.model.invoke(prompt)
         return response.content.strip() if hasattr(response, 'content') else str(response).strip()
-    
+
+    def generate_messages(self, system: str, user: str) -> str:
+        if not self.model_initialized:
+            self.initialize_model()
+            self.model_initialized = True
+
+        resp = self.model.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+        return resp.content.strip()
+
     def get_model_name(self) -> str:
         """Return the OpenAI model ID."""
         return f"openai:{self.model_id}"
 
+
+class OpenRouterWrapper(BaseLLMWrapper):
+    """
+    OpenRouter is OpenAI-compatible; we can use ChatOpenAI with base_url + OPENROUTER_API_KEY.
+    model_id should be OpenRouter's model slug, e.g. 'anthropic/claude-3.5-sonnet'
+    """
+    def __init__(self, model_id: str, params: Optional[Dict[str, Any]] = None):
+        self.model_id = model_id
+        self.params = params or {}
+        self.model_initialized = False
+
+    def initialize_model(self):
+        if not settings.OPENROUTER_API_KEY:
+            raise EnvironmentError("OPENROUTER_API_KEY is not set")
+        
+        base_url = (getattr(settings, "OPENROUTER_BASE_URL", None) or "https://openrouter.ai/api/v1").rstrip("/")
+        logger.debug(
+            f"Initializing OpenRouter model: {self.model_id} base_url={base_url} params={self.params}"
+        )
+
+        # ChatOpenAI in langchain_openai supports base_url in recent versions.
+        # If yours is older, see note below for a fallback.
+        self.model = ChatOpenAI(
+            model=self.model_id,
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url=base_url,
+            temperature=self.params.get("temperature", 0.2),
+            max_tokens=self.params.get("max_tokens", 600),
+            default_headers={
+                "HTTP-Referer": self.params.get("http_referer", "http://localhost"),
+                "X-Title": self.params.get("x_title", "DocChat"),
+            },
+        )
+
+    def generate(self, prompt: str) -> str:
+        if not self.model_initialized:
+            self.initialize_model()
+            self.model_initialized = True
+
+        response = self.model.invoke(prompt)
+        return response.content.strip() if hasattr(response, "content") else str(response).strip()
+    
+    def generate_messages(self, system: str, user: str) -> str:
+        if not self.model_initialized:
+            self.initialize_model()
+            self.model_initialized = True
+        resp = self.model.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+        return resp.content.strip()
+
+    def get_model_name(self) -> str:
+        return f"openrouter:{self.model_id}"
+    
 
 class OllamaWrapper(BaseLLMWrapper):
     """Wrapper for Ollama models."""
@@ -191,6 +259,12 @@ class OllamaWrapper(BaseLLMWrapper):
         except Exception as e:
             logger.error(f"Error in OllamaWrapper.generate(): {type(e).__name__}: {e}")
             raise
+    def generate_messages(self, system: str, user: str) -> str:
+        if not self.model_initialized:
+            self.initialize_model()
+            self.model_initialized = True
+        resp = self.model.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+        return resp.content.strip()
     
     def get_model_name(self) -> str:
         """Return the Ollama model ID."""
@@ -204,7 +278,14 @@ class ModelFactory:
     This implements the Factory design pattern to provide a centralized way
     to create and manage different LLM providers.
     """
-    
+    _BUILDERS: Dict[ModelProvider, Callable[[str, Optional[Dict[str, Any]]], BaseLLMWrapper]] = {
+        ModelProvider.IBM_WATSON: lambda model_id, params: IBMWatsonWrapper(model_id, params),
+        ModelProvider.OPENAI: lambda model_id, params: OpenAIWrapper(model_id, params),
+        ModelProvider.OLLAMA: lambda model_id, params: OllamaWrapper(model_id, params),
+        ModelProvider.OPENROUTER: lambda model_id, params: OpenRouterWrapper(model_id, params),
+    }
+
+
     @staticmethod
     def create_model(
         provider: ModelProvider,
@@ -225,14 +306,11 @@ class ModelFactory:
         Raises:
             ValueError: If the provider is not supported
         """
-        if provider == ModelProvider.IBM_WATSON:
-            return IBMWatsonWrapper(model_id, params)
-        elif provider == ModelProvider.OPENAI:
-            return OpenAIWrapper(model_id, params)
-        elif provider == ModelProvider.OLLAMA:
-            return OllamaWrapper(model_id, params)
-        else:
+        try:
+            return ModelFactory._BUILDERS[provider](model_id, params)
+        except KeyError:
             raise ValueError(f"Unsupported model provider: {provider}")
+
     
     @staticmethod
     def create_model_from_config(role: ModelRole) -> BaseLLMWrapper:
@@ -253,7 +331,7 @@ class ModelFactory:
         return ModelFactory.create_model(
             provider=ModelProvider(config["provider"]),
             model_id=config["model_id"],
-            params=config["params"]
+            params=config["params"] or {},
         )
 
 
@@ -419,7 +497,7 @@ class EmbeddingFactory:
         elif provider == ModelProvider.OLLAMA:
             return OllamaEmbeddingWrapper(model_id, params)
         else:
-            raise ValueError(f"Unsupported embedding provider: {provider}. Ollama embeddings not yet supported.")
+            raise ValueError(f"Unsupported embedding provider: {provider}.")
     
     @staticmethod
     def create_embeddings_from_config() -> BaseEmbeddingWrapper:
@@ -442,4 +520,3 @@ class EmbeddingFactory:
 def get_embeddings() -> BaseEmbeddingWrapper:
     """Get the configured embedding model."""
     return EmbeddingFactory.create_embeddings_from_config()
-    return ModelFactory.create_model_from_config(ModelRole.RELEVANCE)
