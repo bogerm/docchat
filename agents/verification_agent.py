@@ -108,19 +108,19 @@ class VerificationAgent:
         if unsupported_claims:
             report += f"**Unsupported Claims:** {', '.join(unsupported_claims)}\n"
         else:
-            report += f"**Unsupported Claims:** None\n"
+            report += "**Unsupported Claims:** None\n"
 
         if contradictions:
             report += f"**Contradictions:** {', '.join(contradictions)}\n"
         else:
-            report += f"**Contradictions:** None\n"
+            report += "**Contradictions:** None\n"
 
         report += f"**Relevant:** {relevant}\n"
 
         if additional_details:
             report += f"**Additional Details:** {additional_details}\n"
         else:
-            report += f"**Additional Details:** None\n"
+            report += "**Additional Details:** None\n"
 
         return report
 

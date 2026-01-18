@@ -74,6 +74,7 @@ class AgentWorkflow:
                 "is_relevant": False,
                 "draft_answer": "This question isn't related (or there's no data) for your query. Please ask another question relevant to the uploaded document(s)."
             }
+        
     def _decide_after_relevance_check(self, state: AgentState) -> str:
         decision = "relevant" if state["is_relevant"] else "irrelevant"
         logger.debug(f"_decide_after_relevance_check -> {decision}")
