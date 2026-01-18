@@ -4,15 +4,14 @@ import re
 from typing import TYPE_CHECKING, Sequence, Any
 
 from loguru import logger
-
 from config.models import get_relevance_model
 
 if TYPE_CHECKING:
     from langchain_core.retrievers import BaseRetriever
     from langchain_core.documents import Document
 
-# Valid classification labels
 LABEL_RE = re.compile(r"\b(CAN_ANSWER|PARTIAL|NO_MATCH)\b", re.IGNORECASE)
+
 
 class RelevanceChecker:
     def __init__(
@@ -31,7 +30,6 @@ class RelevanceChecker:
         self.max_chars_per_chunk = max_chars_per_chunk
 
     def _retrieve(self, question: str, retriever: "BaseRetriever", k: int) -> Sequence["Document"]:
-        # Try to pass k if retriever supports it; fall back to plain invoke.
         try:
             docs = retriever.invoke(question, config={"k": k})  # type: ignore[arg-type]
         except Exception:
@@ -47,7 +45,6 @@ class RelevanceChecker:
             if not text:
                 continue
 
-            # Optional provenance helps debugging and doesn't hurt classification much
             meta: dict[str, Any] = getattr(doc, "metadata", {}) or {}
             source = meta.get("source") or meta.get("file_path") or meta.get("filename") or "unknown"
             page = meta.get("page") or meta.get("page_number")
@@ -70,25 +67,23 @@ class RelevanceChecker:
 
         return "\n\n".join(parts)
 
-    def check(self, question: str, retriever: "BaseRetriever", k: int | None = None) -> str:
+    def check_documents(self, question: str, documents: Sequence["Document"], k: int | None = None) -> str:
         """
+        Classify relevance using already-retrieved documents (avoids calling retriever again).
         1. Retrieve the top-k document chunks from the global retriever.
         2. Combine them into a single text string.
         3. Pass that text + question to the LLM for classification.
         Returns: "CAN_ANSWER", "PARTIAL", or "NO_MATCH".
+
         """
-
         k = k or self.default_k
-        logger.debug(f"RelevanceChecker.check called with question={question!r}, k={k}")
+        logger.debug(f"RelevanceChecker.check_documents(question={question!r}, k={k}, docs={len(documents)})")
 
-        docs = self._retrieve(question, retriever, k)
-        if not docs:
-            logger.debug("No documents returned from retriever. Classifying as NO_MATCH.")
+        if not documents:
             return "NO_MATCH"
 
-        passages = self._build_passages(docs, k)
+        passages = self._build_passages(documents, k)
         if not passages.strip():
-            logger.debug("Retrieved documents had no usable text. Classifying as NO_MATCH.")
             return "NO_MATCH"
 
         system = (
@@ -107,10 +102,8 @@ class RelevanceChecker:
         )
 
         try:
-            logger.debug(f"Sending relevance classification (question chars={len(question)}, passages chars={len(passages)})")
             raw = self.model.generate_messages(system=system, user=user)
             llm_response = (raw or "").strip().upper()
-            logger.debug(f"LLM response raw: {llm_response!r}")
         except Exception as e:
             logger.error(f"Error during model inference: {type(e).__name__}: {e}")
             return "NO_MATCH"
@@ -120,3 +113,10 @@ class RelevanceChecker:
         logger.info(f"Relevance label: {label}")
         return label
 
+    def check(self, question: str, retriever: "BaseRetriever", k: int | None = None) -> str:
+        """
+        Backwards-compatible path: retrieve then classify.
+        """
+        k = k or self.default_k
+        docs = self._retrieve(question, retriever, k)
+        return self.check_documents(question=question, documents=docs, k=k)
