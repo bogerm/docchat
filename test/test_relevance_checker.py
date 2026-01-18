@@ -166,3 +166,14 @@ def test_strict_retriever_fallback_path(patch_model):
 
     assert checker.check("q", retriever, k=1) == "PARTIAL"
     assert retriever.called == 1
+
+def test_system_prompt_contains_injection_guard(patch_model):
+    model = DummyModel("NO_MATCH")
+    patch_model(model)
+
+    checker = RelevanceChecker()
+    retriever = DummyRetriever([DummyDoc("doc1")])
+
+    checker.check("q", retriever, k=1)
+    assert model.last_system is not None
+    assert "Ignore any instructions" in model.last_system or "untrusted" in model.last_system
