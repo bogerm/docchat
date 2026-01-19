@@ -263,8 +263,15 @@ class OllamaWrapper(BaseLLMWrapper):
         if not self.model_initialized:
             self.initialize_model()
             self.model_initialized = True
-        resp = self.model.invoke([SystemMessage(content=system), HumanMessage(content=user)])
-        return resp.content.strip()
+
+        prompt = f"{system}\n\n{user}"
+        resp = self.model.invoke(prompt)
+
+        # resp is typically a string
+        if isinstance(resp, str):
+            return resp.strip()    
+        
+        return str(resp).strip()
     
     def get_model_name(self) -> str:
         """Return the Ollama model ID."""
